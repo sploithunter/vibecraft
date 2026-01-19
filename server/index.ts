@@ -450,7 +450,8 @@ function startTokenPolling(): void {
   // Poll every 2 seconds - poll all managed sessions
   setInterval(() => {
     for (const session of managedSessions.values()) {
-      if (session.status !== 'offline') {
+      // Only poll internal sessions (they have tmuxSession)
+      if (session.status !== 'offline' && session.tmuxSession) {
         pollTokens(session.tmuxSession)
       }
     }
@@ -695,7 +696,8 @@ function startPermissionPolling(): void {
   // Poll every 1 second (more frequent than tokens since permissions are time-sensitive)
   setInterval(() => {
     for (const session of managedSessions.values()) {
-      if (session.status !== 'offline') {
+      // Only poll internal sessions (they have tmuxSession)
+      if (session.status !== 'offline' && session.tmuxSession) {
         pollPermissions(session.id, session.tmuxSession)
       }
     }
@@ -720,6 +722,12 @@ function sendPermissionResponse(sessionId: string, optionNumber: string): boolea
     return false
   }
 
+  // Only internal sessions have tmuxSession
+  if (!session.tmuxSession) {
+    log(`Cannot send permission response: session ${sessionId} is external (no tmux)`)
+    return false
+  }
+
   // Validate tmux session name
   try {
     validateTmuxSession(session.tmuxSession)
@@ -728,8 +736,11 @@ function sendPermissionResponse(sessionId: string, optionNumber: string): boolea
     return false
   }
 
+  // TypeScript now knows tmuxSession is string (not undefined)
+  const tmuxSession = session.tmuxSession
+
   // Send the option number to tmux - Claude Code expects just the number
-  execFile('tmux', ['send-keys', '-t', session.tmuxSession, optionNumber], EXEC_OPTIONS, (error) => {
+  execFile('tmux', ['send-keys', '-t', tmuxSession, optionNumber], EXEC_OPTIONS, (error: Error | null) => {
     if (error) {
       log(`Failed to send permission response: ${error.message}`)
       return
@@ -828,48 +839,64 @@ function createSession(options: CreateSessionRequest = {}): Promise<ManagedSessi
       agentCmd = claudeArgs.length > 0 ? `claude ${claudeArgs.join(' ')}` : 'claude'
     }
 
-    // Spawn tmux session with agent using execFile to prevent shell injection
-    // Arguments are passed as array, not interpolated into a shell string
+    // Two-step approach: create session without command, then send agent command via send-keys
+    // This prevents issues with PATH containing spaces and avoids the session closing
+    // when the agent exits or has startup issues
     execFile('tmux', [
       'new-session',
       '-d',
       '-s', tmuxSession,
       '-c', cwd,
-      `PATH=${EXEC_PATH} ${agentCmd}`
-    ], EXEC_OPTIONS, (error) => {
-      if (error) {
-        log(`Failed to spawn session: ${error.message}`)
-        reject(new Error(`Failed to spawn session: ${error.message}`))
+    ], EXEC_OPTIONS, (createError) => {
+      if (createError) {
+        log(`Failed to create tmux session: ${createError.message}`)
+        reject(new Error(`Failed to create tmux session: ${createError.message}`))
         return
       }
 
-      const session: ManagedSession = {
-        id,
-        name,
-        type: 'internal',
-        agent,
-        tmuxSession,
-        status: 'idle',
-        createdAt: Date.now(),
-        lastActivity: Date.now(),
-        cwd,
-      }
+      // Now send the agent command to the session
+      execFile('tmux', [
+        'send-keys',
+        '-t', tmuxSession,
+        agentCmd,
+        'Enter'
+      ], EXEC_OPTIONS, (sendError) => {
+        if (sendError) {
+          log(`Failed to send command to session: ${sendError.message}`)
+          // Kill the empty session since we couldn't start the agent
+          exec(`tmux kill-session -t ${tmuxSession}`, EXEC_OPTIONS)
+          reject(new Error(`Failed to start ${agent}: ${sendError.message}`))
+          return
+        }
 
-      managedSessions.set(id, session)
-      log(`Created ${agent} session: ${name} (${id.slice(0, 8)}) -> tmux:${tmuxSession} cmd:'${agentCmd}'`)
+        const session: ManagedSession = {
+          id,
+          name,
+          type: 'internal',
+          agent,
+          tmuxSession,
+          status: 'idle',
+          createdAt: Date.now(),
+          lastActivity: Date.now(),
+          cwd,
+        }
 
-      // Track git status for this session
-      if (cwd) {
-        gitStatusManager.track(id, cwd)
-        // Remember this directory for future autocomplete
-        projectsManager.addProject(cwd, name)
-      }
+        managedSessions.set(id, session)
+        log(`Created ${agent} session: ${name} (${id.slice(0, 8)}) -> tmux:${tmuxSession} cmd:'${agentCmd}'`)
 
-      // Broadcast and persist
-      broadcastSessions()
-      saveSessions()
+        // Track git status for this session
+        if (cwd) {
+          gitStatusManager.track(id, cwd)
+          // Remember this directory for future autocomplete
+          projectsManager.addProject(cwd, name)
+        }
 
-      resolve(session)
+        // Broadcast and persist
+        broadcastSessions()
+        saveSessions()
+
+        resolve(session)
+      })
     })
   })
 }
@@ -922,20 +949,8 @@ function deleteSession(id: string): Promise<boolean> {
       return
     }
 
-    // Kill the tmux session using execFile to prevent shell injection
-    try {
-      validateTmuxSession(session.tmuxSession)
-    } catch {
-      log(`Invalid tmux session name: ${session.tmuxSession}`)
-      resolve(false)
-      return
-    }
-
-    execFile('tmux', ['kill-session', '-t', session.tmuxSession], EXEC_OPTIONS, (error) => {
-      if (error) {
-        log(`Warning: Failed to kill tmux session: ${error.message}`)
-      }
-
+    // Helper to clean up session state
+    const cleanup = () => {
       managedSessions.delete(id)
       gitStatusManager.untrack(id)
       // Clean up mapping
@@ -949,6 +964,28 @@ function deleteSession(id: string): Promise<boolean> {
       broadcastSessions()
       saveSessions()
       resolve(true)
+    }
+
+    // External sessions don't have tmux sessions to kill
+    if (!session.tmuxSession) {
+      cleanup()
+      return
+    }
+
+    // Kill the tmux session using execFile to prevent shell injection
+    try {
+      validateTmuxSession(session.tmuxSession)
+    } catch {
+      log(`Invalid tmux session name: ${session.tmuxSession}`)
+      cleanup() // Still clean up the session record
+      return
+    }
+
+    execFile('tmux', ['kill-session', '-t', session.tmuxSession], EXEC_OPTIONS, (error: Error | null) => {
+      if (error) {
+        log(`Warning: Failed to kill tmux session: ${error.message}`)
+      }
+      cleanup()
     })
   })
 }
@@ -960,6 +997,11 @@ async function sendPromptToSession(id: string, prompt: string): Promise<{ ok: bo
   const session = managedSessions.get(id)
   if (!session) {
     return { ok: false, error: 'Session not found' }
+  }
+
+  // External sessions don't have tmux sessions
+  if (!session.tmuxSession) {
+    return { ok: false, error: 'Cannot send prompt to external session' }
   }
 
   try {
@@ -993,6 +1035,9 @@ function checkSessionHealth(): void {
     let changed = false
 
     for (const session of managedSessions.values()) {
+      // Skip external sessions (no tmux session to check)
+      if (!session.tmuxSession) continue
+
       const isAlive = activeSessions.has(session.tmuxSession)
       const newStatus = isAlive ? (session.status === 'offline' ? 'idle' : session.status) : 'offline'
 
@@ -1911,6 +1956,13 @@ function handleHttpRequest(req: IncomingMessage, res: ServerResponse) {
         return
       }
 
+      // External sessions don't have tmux sessions
+      if (!session.tmuxSession) {
+        res.writeHead(400, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ ok: false, error: 'Cannot cancel external sessions' }))
+        return
+      }
+
       try {
         validateTmuxSession(session.tmuxSession)
       } catch {
@@ -1919,7 +1971,7 @@ function handleHttpRequest(req: IncomingMessage, res: ServerResponse) {
         return
       }
 
-      execFile('tmux', ['send-keys', '-t', session.tmuxSession, 'C-c'], EXEC_OPTIONS, (error) => {
+      execFile('tmux', ['send-keys', '-t', session.tmuxSession, 'C-c'], EXEC_OPTIONS, (error: Error | null) => {
         res.writeHead(200, { 'Content-Type': 'application/json' })
         if (error) {
           res.end(JSON.stringify({ ok: false, error: error.message }))
@@ -1972,6 +2024,13 @@ function handleHttpRequest(req: IncomingMessage, res: ServerResponse) {
         return
       }
 
+      // External sessions can't be restarted (no tmux session)
+      if (!session.tmuxSession) {
+        res.writeHead(400, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ ok: false, error: 'Cannot restart external sessions' }))
+        return
+      }
+
       // Validate inputs to prevent command injection
       try {
         validateTmuxSession(session.tmuxSession)
@@ -1990,41 +2049,68 @@ function handleHttpRequest(req: IncomingMessage, res: ServerResponse) {
         return
       }
 
+      // Build agent command based on agent type
+      const agent = session.agent || 'claude'
+      let agentCmd: string
+      if (agent === 'codex') {
+        agentCmd = `codex -C ${cwd}`
+      } else {
+        agentCmd = 'claude -c --permission-mode=bypassPermissions --dangerously-skip-permissions'
+      }
+
+      // TypeScript now knows tmuxSession is string (not undefined)
+      const tmuxSessionName = session.tmuxSession
+
       // Kill existing tmux session if it exists (ignore errors)
-      execFile('tmux', ['kill-session', '-t', session.tmuxSession], EXEC_OPTIONS, () => {
-        // Respawn tmux session with claude using execFile
+      execFile('tmux', ['kill-session', '-t', tmuxSessionName], EXEC_OPTIONS, () => {
+        // Two-step approach: create session, then send command
         execFile('tmux', [
           'new-session',
           '-d',
-          '-s', session.tmuxSession,
+          '-s', tmuxSessionName,
           '-c', cwd,
-          `PATH=${EXEC_PATH} claude -c --permission-mode=bypassPermissions --dangerously-skip-permissions`
-        ], EXEC_OPTIONS, (error) => {
-          if (error) {
+        ], EXEC_OPTIONS, (createError: Error | null) => {
+          if (createError) {
             res.writeHead(500, { 'Content-Type': 'application/json' })
-            res.end(JSON.stringify({ ok: false, error: `Failed to restart: ${error.message}` }))
+            res.end(JSON.stringify({ ok: false, error: `Failed to create tmux session: ${createError.message}` }))
             return
           }
 
-          // Update session state
-          session.status = 'idle'
-          session.lastActivity = Date.now()
-          session.claudeSessionId = undefined // Will be re-linked when events come in
-          session.currentTool = undefined
-
-          // Clear old linking
-          for (const [claudeId, managedId] of claudeToManagedMap) {
-            if (managedId === session.id) {
-              claudeToManagedMap.delete(claudeId)
+          // Send the agent command
+          execFile('tmux', [
+            'send-keys',
+            '-t', tmuxSessionName,
+            agentCmd,
+            'Enter'
+          ], EXEC_OPTIONS, (sendError: Error | null) => {
+            if (sendError) {
+              exec(`tmux kill-session -t ${tmuxSessionName}`, EXEC_OPTIONS)
+              res.writeHead(500, { 'Content-Type': 'application/json' })
+              res.end(JSON.stringify({ ok: false, error: `Failed to restart: ${sendError.message}` }))
+              return
             }
-          }
 
-          log(`Restarted session: ${session.name} (${session.id.slice(0, 8)})`)
-          broadcastSessions()
-          saveSessions()
+            // Update session state
+            session.status = 'idle'
+            session.lastActivity = Date.now()
+            session.claudeSessionId = undefined // Will be re-linked when events come in
+            session.codexThreadId = undefined // Clear Codex thread ID too
+            session.currentTool = undefined
 
-          res.writeHead(200, { 'Content-Type': 'application/json' })
-          res.end(JSON.stringify({ ok: true, session }))
+            // Clear old linking
+            for (const [claudeId, managedId] of claudeToManagedMap) {
+              if (managedId === session.id) {
+                claudeToManagedMap.delete(claudeId)
+              }
+            }
+
+            log(`Restarted ${agent} session: ${session.name} (${session.id.slice(0, 8)})`)
+            broadcastSessions()
+            saveSessions()
+
+            res.writeHead(200, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ ok: true, session }))
+          })
         })
       })
       return

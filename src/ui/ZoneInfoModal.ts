@@ -119,7 +119,7 @@ function renderContent(data: ZoneInfoData): void {
       </div>
       <div class="zone-info-row">
         <span class="zone-info-label">tmux Session</span>
-        <span class="zone-info-value zone-info-mono">${escapeHtml(s.tmuxSession)}</span>
+        <span class="zone-info-value zone-info-mono">${escapeHtml(s.tmuxSession || '(external)')}</span>
       </div>
       <div class="zone-info-row">
         <span class="zone-info-label">Created</span>
