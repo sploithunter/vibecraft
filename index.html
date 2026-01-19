@@ -180,8 +180,24 @@
           <input type="text" id="session-name-input" placeholder="Auto-filled from directory..." autocomplete="off" />
         </div>
 
+        <!-- Agent Selector -->
         <div class="modal-field">
-          <label>Options</label>
+          <label>Agent</label>
+          <div class="modal-agent-selector">
+            <label class="modal-agent-option">
+              <input type="radio" name="session-agent" value="claude" checked />
+              <span class="agent-label">🧠 Claude</span>
+            </label>
+            <label class="modal-agent-option">
+              <input type="radio" name="session-agent" value="codex" />
+              <span class="agent-label">🤖 Codex</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Claude Options -->
+        <div class="modal-field" id="claude-options">
+          <label>Claude Options</label>
           <div class="modal-checkboxes">
             <label class="modal-checkbox">
               <input type="checkbox" id="session-opt-continue" />
@@ -195,6 +211,28 @@
               <input type="checkbox" id="session-opt-chrome" />
               <span class="checkbox-label">Chrome <code>--chrome</code></span>
             </label>
+          </div>
+        </div>
+
+        <!-- Codex Options (hidden by default) -->
+        <div class="modal-field" id="codex-options" style="display: none;">
+          <label>Codex Options</label>
+          <div class="modal-checkboxes">
+            <label class="modal-checkbox">
+              <input type="checkbox" id="session-opt-codex-skip-perms" checked />
+              <span class="checkbox-label">Skip permissions <code>--dangerously-bypass-approvals-and-sandbox</code></span>
+            </label>
+          </div>
+          <div class="modal-field" style="margin-top: 10px;">
+            <label for="session-codex-model">Model</label>
+            <select id="session-codex-model">
+              <option value="">Default (from config)</option>
+              <option value="gpt-5.2-codex" selected>GPT-5.2 Codex</option>
+              <option value="o3">o3</option>
+              <option value="o3-mini">o3-mini</option>
+              <option value="o1">o1</option>
+              <option value="gpt-4.1">GPT-4.1</option>
+            </select>
           </div>
         </div>
 

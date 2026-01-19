@@ -260,21 +260,41 @@ export interface TaskToolInput {
 // Session Management (Orchestration)
 // ============================================================================
 
-/** Status of a managed Claude session */
+/** Status of a managed session */
 export type SessionStatus = 'idle' | 'working' | 'waiting' | 'offline'
 
-/** A managed Claude session */
+/** Session type - how it was created */
+export type SessionType = 'internal' | 'external'
+
+/** Agent type - which AI agent is running */
+export type AgentType = 'claude' | 'codex'
+
+/** Terminal info for external sessions (enables message sending) */
+export interface TerminalInfo {
+  app: string           // e.g., 'iTerm2', 'Terminal', 'Warp'
+  windowId?: string     // For AppleScript targeting
+  tabId?: string
+  paneId?: string       // For tmux within terminal
+}
+
+/** A managed Claude/Codex session */
 export interface ManagedSession {
   /** Our internal ID (UUID) */
   id: string
   /** User-friendly name ("Frontend", "Tests") */
   name: string
-  /** Actual tmux session name */
-  tmuxSession: string
+  /** Session type: 'internal' = created via New Zone (tmux), 'external' = detected from hooks */
+  type: SessionType
+  /** Agent type: 'claude' or 'codex' - which AI agent is running */
+  agent: AgentType
+  /** Actual tmux session name (only for internal sessions) */
+  tmuxSession?: string
   /** Current status */
   status: SessionStatus
   /** Claude Code session ID (from events, may differ from our ID) */
   claudeSessionId?: string
+  /** Codex thread ID (for Codex agent) */
+  codexThreadId?: string
   /** Creation timestamp */
   createdAt: number
   /** Last activity timestamp */
@@ -295,6 +315,12 @@ export interface ManagedSession {
     q: number
     r: number
   }
+  /** Agent's suggested next prompt (shown in gray at input line) */
+  suggestion?: string
+  /** Ralph Wiggum mode - auto-accept suggestions */
+  autoAccept?: boolean
+  /** Terminal info for external sessions (enables message sending) */
+  terminal?: TerminalInfo
 }
 
 /** Git repository status */
@@ -347,16 +373,31 @@ export interface KnownProject {
   useCount: number
 }
 
+/** Session creation flags */
+export interface SessionFlags {
+  // Claude-specific flags
+  continue?: boolean           // Claude: -c (continue conversation)
+  skipPermissions?: boolean    // Claude: --dangerously-skip-permissions, Codex: --dangerously-bypass-approvals-and-sandbox
+  chrome?: boolean             // Claude: --chrome
+
+  // Codex-specific flags
+  sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access'  // Codex: --sandbox
+  approval?: 'untrusted' | 'on-failure' | 'on-request' | 'never'    // Codex: --ask-for-approval
+  fullAuto?: boolean           // Codex: --full-auto (convenience alias)
+  model?: string               // Codex: --model (e.g., 'gpt-5.2-codex', 'o3')
+
+  // General flags
+  openTerminal?: boolean       // Open terminal window for this session
+}
+
 /** Request to create a new session */
 export interface CreateSessionRequest {
   name?: string
   cwd?: string
-  /** Claude command flags */
-  flags?: {
-    continue?: boolean        // -c (continue last conversation)
-    skipPermissions?: boolean  // --dangerously-skip-permissions
-    chrome?: boolean        // --chrome
-  }
+  /** Agent type: 'claude' (default) or 'codex' */
+  agent?: AgentType
+  /** Session flags for Claude or Codex CLI */
+  flags?: SessionFlags
 }
 
 /** Request to update a session */

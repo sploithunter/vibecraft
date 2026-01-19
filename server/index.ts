@@ -33,6 +33,8 @@ import type {
   TextTile,
   CreateTextTileRequest,
   UpdateTextTileRequest,
+  AgentType,
+  SessionFlags,
 } from '../shared/types.js'
 import { DEFAULTS } from '../shared/defaults.js'
 import { GitStatusManager } from './GitStatusManager.js'
@@ -759,13 +761,14 @@ function shortId(): string {
 }
 
 /**
- * Create a new managed session
+ * Create a new managed session (Claude or Codex)
  */
 function createSession(options: CreateSessionRequest = {}): Promise<ManagedSession> {
   return new Promise((resolve, reject) => {
     const id = randomUUID()
     sessionCounter++
-    const name = options.name || `Claude ${sessionCounter}`
+    const agent = options.agent || 'claude'
+    const name = options.name || `${agent === 'codex' ? 'Codex' : 'Claude'} ${sessionCounter}`
     const tmuxSession = `vibecraft-${shortId()}`
 
     // Validate cwd to prevent command injection
@@ -777,34 +780,62 @@ function createSession(options: CreateSessionRequest = {}): Promise<ManagedSessi
       return
     }
 
-    // Build claude command with flags
     const flags = options.flags || {}
-    const claudeArgs: string[] = []
+    let agentCmd: string
 
-    // Defaults: continue=true, skipPermissions=true, chrome=false
-    if (flags.continue !== false) {
-      claudeArgs.push('-c')
-    }
-    if (flags.skipPermissions !== false) {
-      // --permission-mode=bypassPermissions skips the workspace trust dialog
-      // --dangerously-skip-permissions skips tool permission prompts
-      claudeArgs.push('--permission-mode=bypassPermissions')
-      claudeArgs.push('--dangerously-skip-permissions')
-    }
-    if (flags.chrome) {
-      claudeArgs.push('--chrome')
+    if (agent === 'codex') {
+      // Build codex command with flags
+      const codexArgs: string[] = ['-C', cwd]
+
+      // Add model if specified
+      if (flags.model) {
+        codexArgs.push(`--model=${flags.model}`)
+      }
+
+      // Handle permission flags
+      if (flags.skipPermissions === true) {
+        codexArgs.push('--dangerously-bypass-approvals-and-sandbox')
+      } else if (flags.fullAuto === true || (flags.sandbox === 'workspace-write' && flags.approval === 'on-request')) {
+        codexArgs.push('--full-auto')
+      } else {
+        if (flags.sandbox) {
+          codexArgs.push(`--sandbox=${flags.sandbox}`)
+        }
+        if (flags.approval) {
+          codexArgs.push(`--ask-for-approval=${flags.approval}`)
+        }
+      }
+
+      agentCmd = `codex ${codexArgs.join(' ')}`
+    } else {
+      // Build claude command with flags
+      const claudeArgs: string[] = []
+
+      // Defaults: continue=true, skipPermissions=true, chrome=false
+      if (flags.continue !== false) {
+        claudeArgs.push('-c')
+      }
+      if (flags.skipPermissions !== false) {
+        // --permission-mode=bypassPermissions skips the workspace trust dialog
+        // --dangerously-skip-permissions skips tool permission prompts
+        claudeArgs.push('--permission-mode=bypassPermissions')
+        claudeArgs.push('--dangerously-skip-permissions')
+      }
+      if (flags.chrome) {
+        claudeArgs.push('--chrome')
+      }
+
+      agentCmd = claudeArgs.length > 0 ? `claude ${claudeArgs.join(' ')}` : 'claude'
     }
 
-    const claudeCmd = claudeArgs.length > 0 ? `claude ${claudeArgs.join(' ')}` : 'claude'
-
-    // Spawn tmux session with claude using execFile to prevent shell injection
+    // Spawn tmux session with agent using execFile to prevent shell injection
     // Arguments are passed as array, not interpolated into a shell string
     execFile('tmux', [
       'new-session',
       '-d',
       '-s', tmuxSession,
       '-c', cwd,
-      `PATH=${EXEC_PATH} ${claudeCmd}`
+      `PATH=${EXEC_PATH} ${agentCmd}`
     ], EXEC_OPTIONS, (error) => {
       if (error) {
         log(`Failed to spawn session: ${error.message}`)
@@ -815,6 +846,8 @@ function createSession(options: CreateSessionRequest = {}): Promise<ManagedSessi
       const session: ManagedSession = {
         id,
         name,
+        type: 'internal',
+        agent,
         tmuxSession,
         status: 'idle',
         createdAt: Date.now(),
@@ -823,7 +856,7 @@ function createSession(options: CreateSessionRequest = {}): Promise<ManagedSessi
       }
 
       managedSessions.set(id, session)
-      log(`Created session: ${name} (${id.slice(0, 8)}) -> tmux:${tmuxSession} cmd:'${claudeCmd}'`)
+      log(`Created ${agent} session: ${name} (${id.slice(0, 8)}) -> tmux:${tmuxSession} cmd:'${agentCmd}'`)
 
       // Track git status for this session
       if (cwd) {
@@ -1038,6 +1071,13 @@ function loadSessions(): void {
         // Mark all as offline initially - health check will update
         session.status = 'offline'
         session.currentTool = undefined
+        // Backwards compatibility: add type and agent if missing
+        if (!session.type) {
+          session.type = session.tmuxSession ? 'internal' : 'external'
+        }
+        if (!session.agent) {
+          session.agent = 'claude'  // Default to Claude for legacy sessions
+        }
         managedSessions.set(session.id, session)
         // Track git status if session has a cwd
         if (session.cwd) {

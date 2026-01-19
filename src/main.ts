@@ -20,6 +20,8 @@ import {
   type PreToolUseEvent,
   type PostToolUseEvent,
   type ManagedSession,
+  type SessionFlags,
+  type AgentType,
 } from '../shared/types'
 import { soundManager } from './audio'
 
@@ -363,22 +365,17 @@ function selectManagedSession(sessionId: string | null): void {
 }
 
 /**
- * Create a new managed session
+ * Create a new managed session (Claude or Codex)
  */
-interface SessionFlags {
-  continue?: boolean
-  skipPermissions?: boolean
-  chrome?: boolean
-}
-
 async function createManagedSession(
   name?: string,
   cwd?: string,
   flags?: SessionFlags,
   hintPosition?: { x: number; z: number },
-  pendingZoneId?: string
+  pendingZoneId?: string,
+  agent?: AgentType
 ): Promise<void> {
-  const data = await sessionAPI.createSession(name, cwd, flags)
+  const data = await sessionAPI.createSession(name, cwd, flags, agent)
 
   if (!data.ok) {
     console.error('Failed to create session:', data.error)
@@ -626,19 +623,54 @@ function setupManagedSessions(): void {
     currentModalHint = null  // Clear hint when modal closes
   }
 
+  // Agent selector toggle logic
+  const agentRadios = document.querySelectorAll('input[name="session-agent"]')
+  const claudeOptionsEl = document.getElementById('claude-options')
+  const codexOptionsEl = document.getElementById('codex-options')
+
+  agentRadios.forEach(radio => {
+    radio.addEventListener('change', (e) => {
+      const target = e.target as HTMLInputElement
+      if (target.value === 'codex') {
+        claudeOptionsEl?.style.setProperty('display', 'none')
+        codexOptionsEl?.style.setProperty('display', 'block')
+      } else {
+        claudeOptionsEl?.style.setProperty('display', 'block')
+        codexOptionsEl?.style.setProperty('display', 'none')
+      }
+    })
+  })
+
   const handleCreate = (): void => {
     const name = nameInput?.value.trim() || undefined
     const cwd = cwdInput?.value.trim() || undefined
 
-    // Read flag checkboxes
-    const continueCheck = document.getElementById('session-opt-continue') as HTMLInputElement
-    const skipPermsCheck = document.getElementById('session-opt-skip-perms') as HTMLInputElement
-    const chromeCheck = document.getElementById('session-opt-chrome') as HTMLInputElement
+    // Get selected agent
+    const agentRadio = document.querySelector('input[name="session-agent"]:checked') as HTMLInputElement
+    const agent: AgentType = (agentRadio?.value as AgentType) || 'claude'
 
-    const flags: SessionFlags = {
-      continue: continueCheck?.checked ?? true,
-      skipPermissions: skipPermsCheck?.checked ?? true,
-      chrome: chromeCheck?.checked ?? false,
+    let flags: SessionFlags
+
+    if (agent === 'codex') {
+      // Read Codex-specific flags
+      const codexSkipPermsCheck = document.getElementById('session-opt-codex-skip-perms') as HTMLInputElement
+      const codexModelSelect = document.getElementById('session-codex-model') as HTMLSelectElement
+
+      flags = {
+        skipPermissions: codexSkipPermsCheck?.checked ?? true,
+        model: codexModelSelect?.value || undefined,
+      }
+    } else {
+      // Read Claude-specific flags
+      const continueCheck = document.getElementById('session-opt-continue') as HTMLInputElement
+      const skipPermsCheck = document.getElementById('session-opt-skip-perms') as HTMLInputElement
+      const chromeCheck = document.getElementById('session-opt-chrome') as HTMLInputElement
+
+      flags = {
+        continue: continueCheck?.checked ?? true,
+        skipPermissions: skipPermsCheck?.checked ?? true,
+        chrome: chromeCheck?.checked ?? false,
+      }
     }
 
     // Capture hint before closing modal (closeModal clears it)
@@ -667,7 +699,7 @@ function setupManagedSessions(): void {
     soundManager.play('modal_confirm')
 
     closeModal()
-    createManagedSession(name, cwd, flags, hintPosition ?? undefined, pendingId)
+    createManagedSession(name, cwd, flags, hintPosition ?? undefined, pendingId, agent)
   }
 
   const handleCancel = (): void => {
@@ -1772,8 +1804,11 @@ function handleEvent(event: ClaudeEvent) {
 
   // If no session (unlinked), still add to feed/timeline with default color but skip 3D updates
   const eventColor = session?.color ?? 0x888888
+  // Look up managed session to get agent type
+  const managedSession = state.managedSessions.find(s => s.id === event.sessionId || s.claudeSessionId === event.sessionId)
+  const agentType = managedSession?.agent
   state.timelineManager?.add(event, eventColor)
-  state.feedManager?.add(event, eventColor)
+  state.feedManager?.add(event, eventColor, agentType)
 
   // Skip 3D scene updates for unlinked sessions
   if (!session) {
@@ -1871,7 +1906,7 @@ function handleEvent(event: ClaudeEvent) {
 
       // Show thinking indicator AFTER feedManager.add() to ensure correct order
       // (prompt appears first, then thinking indicator)
-      state.feedManager?.showThinking(event.sessionId, session.color)
+      state.feedManager?.showThinking(event.sessionId, session.color, managedSession?.agent)
 
       // Update UI badge (zone attention cleared by zoneHandlers)
       updateAttentionBadge()

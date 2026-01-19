@@ -5,13 +5,7 @@
  * UI logic and state updates are handled by the caller (main.ts).
  */
 
-import type { ManagedSession } from '../../shared/types'
-
-export interface SessionFlags {
-  continue?: boolean
-  skipPermissions?: boolean
-  chrome?: boolean
-}
+import type { ManagedSession, SessionFlags, AgentType } from '../../shared/types'
 
 export interface CreateSessionResponse {
   ok: boolean
@@ -36,18 +30,19 @@ export interface ServerInfoResponse {
 export function createSessionAPI(apiUrl: string) {
   return {
     /**
-     * Create a new managed session
+     * Create a new managed session (Claude or Codex)
      */
     async createSession(
       name?: string,
       cwd?: string,
-      flags?: SessionFlags
+      flags?: SessionFlags,
+      agent?: AgentType
     ): Promise<CreateSessionResponse> {
       try {
         const response = await fetch(`${apiUrl}/sessions`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, cwd, flags }),
+          body: JSON.stringify({ name, cwd, flags, agent }),
         })
         return await response.json()
       } catch (e) {

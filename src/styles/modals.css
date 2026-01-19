@@ -238,6 +238,89 @@
   color: rgba(255, 255, 255, 0.5);
 }
 
+/* Agent Selector */
+.modal-agent-selector {
+  display: flex;
+  gap: 12px;
+}
+
+.modal-agent-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.modal-agent-option:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.modal-agent-option:has(input:checked) {
+  background: rgba(100, 200, 255, 0.15);
+  border-color: rgba(100, 200, 255, 0.4);
+}
+
+.modal-agent-option input[type="radio"] {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  position: relative;
+}
+
+.modal-agent-option input[type="radio"]:checked {
+  border-color: #64c8ff;
+  background: #64c8ff;
+}
+
+.modal-agent-option input[type="radio"]:checked::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 6px;
+  height: 6px;
+  background: #1a1a2e;
+  border-radius: 50%;
+}
+
+.modal-agent-option .agent-label {
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+/* Model Select */
+.modal-field select {
+  width: 100%;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.modal-field select:focus {
+  outline: none;
+  border-color: rgba(100, 200, 255, 0.5);
+}
+
+.modal-field select option {
+  background: #1a1a2e;
+  color: rgba(255, 255, 255, 0.9);
+}
+
 /* New Session Modal */
 #new-session-modal {
   position: fixed;
